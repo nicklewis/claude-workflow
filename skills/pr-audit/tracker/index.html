@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PR 2224 audit</title>
+<style>
+  :root {
+    --bg: #f7f6f2; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a64; --line: #e2e0d8;
+    --accent: #2f5d9e; --accent-ink: #ffffff;
+    --ok: #2e7d4f; --bad: #b3372f; --warn: #a56a00;
+    --ran: #2e7d4f; --read: #2f5d9e; --unverified: #a56a00;
+    --code-bg: #eeece5;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a; --panel: #1f2124; --ink: #e8e6df; --muted: #9a988f; --line: #33363b;
+      --accent: #7aa7e6; --accent-ink: #0f1a2b;
+      --ok: #6cc593; --bad: #ef8b7f; --warn: #e2b04a;
+      --ran: #6cc593; --read: #7aa7e6; --unverified: #e2b04a;
+      --code-bg: #2a2d31;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); }
+  code { font-family: var(--mono); font-size: 0.9em; background: var(--code-bg); padding: 0.05em 0.35em; border-radius: 4px; }
+  a { color: var(--accent); }
+  header { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); padding: 14px 24px; }
+  .hdr-row { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between; max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0; font-weight: 650; }
+  h1 small { color: var(--muted); font-weight: 400; margin-left: 8px; }
+  .progress { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+  .bar { width: 200px; height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--ok); width: 0; transition: width .2s; }
+  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .controls button, .controls select { font: inherit; font-size: 13px; padding: 5px 10px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; cursor: pointer; }
+  .controls button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  main { max-width: 1080px; margin: 0 auto; padding: 20px 24px 80px; }
+  .verdict { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; margin-bottom: 24px; }
+  .verdict h2 { margin: 0 0 6px; font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .verdict p { margin: 0 0 8px; }
+  .verdict p:last-child { margin: 0; }
+  .meta { color: var(--muted); font-size: 13px; }
+  section.sec { margin-bottom: 36px; }
+  section.sec > h2 { font-size: 20px; margin: 28px 0 4px; }
+  section.sec > p.blurb { color: var(--muted); margin: 0 0 16px; }
+  h3.grp { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 22px 0 10px; display: flex; align-items: center; gap: 10px; }
+  h3.grp .count { font-weight: 400; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; }
+  .card.reviewed { border-left-color: var(--ok); }
+  .card.hidden { display: none; }
+  .card-head { display: flex; gap: 12px; align-items: flex-start; }
+  .card-head .id { font-family: var(--mono); font-size: 12px; color: var(--muted); min-width: 34px; padding-top: 3px; }
+  .card-head .summary { flex: 1; font-weight: 600; }
+  .card-head .check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; padding-top: 3px; }
+  .tok { display: inline-block; font-family: var(--mono); font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor; margin-right: 8px; vertical-align: 1px; }
+  .tok.ran { color: var(--ran); } .tok.read { color: var(--read); } .tok.unverified { color: var(--unverified); }
+  .evidence { color: var(--muted); font-size: 13px; margin: 4px 0 0 46px; }
+  details { margin: 8px 0 0 46px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 13px; user-select: none; }
+  .detail { margin-top: 8px; }
+  .detail p { margin: 0 0 8px; }
+  .kv { display: grid; grid-template-columns: 96px 1fr; gap: 4px 12px; margin-top: 6px; }
+  .kv dt { color: var(--muted); font-size: 13px; }
+  .kv dd { margin: 0; }
+  .refs { margin-top: 8px; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .refs span { display: inline-block; margin-right: 10px; }
+  .links a { font-size: 12px; margin-right: 8px; }
+  .review { margin: 12px 0 0 46px; display: grid; grid-template-columns: 1fr; gap: 8px; }
+  .verdicts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .verdicts label { font-size: 13px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; cursor: pointer; user-select: none; }
+  .verdicts label:has(input:checked) { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .verdicts input { display: none; }
+  textarea { width: 100%; min-height: 54px; font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); resize: vertical; }
+  .saved { font-size: 12px; color: var(--muted); min-height: 16px; }
+  .saved.err { color: var(--bad); }
+  .limit { color: var(--muted); font-size: 14px; border-top: 1px dashed var(--line); padding-top: 12px; margin-top: 16px; }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  .banner { max-width: 1080px; margin: 12px auto 0; padding: 10px 14px; border: 1px solid var(--ok); border-radius: 8px; color: var(--ok); font-size: 14px; }
+  .banner.err { border-color: var(--bad); color: var(--bad); }
+  body.submitted .review, body.submitted .reviewed-box { pointer-events: none; opacity: .55; }
+</style>
+</head>
+<body>
+<header>
+  <div class="hdr-row">
+    <h1 id="title">PR audit</h1>
+    <div class="progress"><span id="progress-text">0 / 0 reviewed</span><div class="bar"><div id="progress-bar"></div></div></div>
+    <div class="controls">
+      <select id="filter">
+        <option value="all">All</option>
+        <option value="unreviewed">Unreviewed</option>
+        <option value="reviewed">Reviewed</option>
+        <option value="noted">With notes</option>
+      </select>
+      <button id="expand">Expand all</button>
+      <button id="collapse">Collapse all</button>
+      <button id="copy">Copy summary</button>
+      <button id="submit" class="primary" title="Stops the server and hands your answers to the auditor">Submit</button>
+    </div>
+  </div>
+  <div class="banner" id="banner" hidden></div>
+</header>
+<main id="main"></main>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  const $ = (sel, el = document) => el.querySelector(sel);
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  // Backticks are the only markup the findings carry: `x` → <code>x</code>.
+  const md = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  let findings, state = {};
+  const items = new Map();   // id → {item, section}
+  const timers = new Map();
+
+  async function load() {
+    const [f, s] = await Promise.all([
+      fetch('/api/findings').then(r => r.json()),
+      fetch('/api/state').then(r => r.json()),
+    ]);
+    findings = f; state = s;
+    for (const sec of f.sections) for (const g of sec.groups) for (const it of g.items) items.set(it.id, { item: it, section: sec.id, group: g.id });
+    render();
+  }
+
+  function render() {
+    const pr = findings.pr;
+    $('#title').innerHTML = `${esc(pr.title)} <small>#${pr.number} · ${esc(pr.head)} · ${esc(pr.ticket)} · audited ${esc(pr.audited)}</small>`;
+    document.title = `PR ${pr.number} audit`;
+    const main = $('#main');
+    main.innerHTML = '';
+
+    const lead = document.createElement('div');
+    lead.className = 'verdict';
+    lead.innerHTML = `<h2>The change</h2>` + (findings.lead || []).map(p =>
+      `<p><strong>${esc(p.heading)}.</strong> ${md(p.text)}</p>`).join('');
+    main.appendChild(lead);
+
+    const v = document.createElement('div');
+    v.className = 'verdict';
+    v.innerHTML = `<h2>Verdict</h2><p>${md(findings.verdict)}</p>
+      <p><strong>Risk profile.</strong> ${md(findings.risk_pointer)}</p>
+      <p class="meta"><a href="${esc(pr.url)}">PR</a> · <a href="${esc(pr.ticket_url)}">${esc(pr.ticket)}</a> · worktree <code>${esc(pr.worktree)}</code> · probes <code>${esc(pr.probe_file)}</code> (<code>${esc(pr.probe_command)}</code>)</p>`;
+    main.appendChild(v);
+
+    for (const sec of findings.sections) {
+      const s = document.createElement('section');
+      s.className = 'sec';
+      s.innerHTML = `<h2>${esc(sec.id)} — ${esc(sec.title)}</h2><p class="blurb">${md(sec.blurb)}</p>`;
+      for (const g of sec.groups) {
+        const h = document.createElement('h3');
+        h.className = 'grp';
+        h.innerHTML = `${esc(g.title)} <span class="count" data-group="${g.id}"></span>`;
+        s.appendChild(h);
+        for (const it of g.items) s.appendChild(card(it, sec));
+      }
+      if (sec.id === 'A') {
+        const l = document.createElement('p');
+        l.className = 'limit';
+        l.innerHTML = `<strong>Limit line.</strong> ${md(findings.limit_line)}`;
+        s.appendChild(l);
+      }
+      if (sec.id === 'B') {
+        const l = document.createElement('p');
+        l.className = 'limit';
+        l.innerHTML = `Nothing goes to the author until you say so.`;
+        s.appendChild(l);
+      }
+      main.appendChild(s);
+    }
+    updateProgress();
+    applyFilter();
+  }
+
+  function card(it, sec) {
+    const st = state[it.id] || {};
+    const el = document.createElement('article');
+    el.className = 'card' + (st.reviewed ? ' reviewed' : '');
+    el.dataset.id = it.id;
+    const tok = it.provenance ? `<span class="tok ${it.provenance}">${it.provenance}:</span>` : '';
+    const links = (it.links || []).map(l => `<a href="#${l}" data-jump="${l}">${l} ↗</a>`).join('');
+    let body;
+    if (sec.id === 'A') {
+      body = `<div class="evidence">${tok}${md(it.evidence || '')}</div>
+        <details><summary>Detail</summary><div class="detail"><p>${md(it.detail)}</p>${refs(it)}<div class="links">${links}</div></div></details>`;
+    } else {
+      body = `<details><summary>Turns on · grounded · default</summary><div class="detail">
+        <dl class="kv"><dt>turns on</dt><dd>${md(it.turns_on)}</dd><dt>grounded</dt><dd>${md(it.grounded)}</dd><dt>default</dt><dd>${md(it.default)}</dd></dl>
+        ${refs(it)}<div class="links">${links}</div></div></details>`;
+    }
+    const choices = findings.verdicts[sec.id].map(v =>
+      `<label><input type="radio" name="v-${it.id}" value="${esc(v)}" ${st.verdict === v ? 'checked' : ''}>${esc(v)}</label>`).join('');
+    el.innerHTML = `
+      <div class="card-head">
+        <span class="id" id="${it.id}">${it.id}</span>
+        <div class="summary">${md(it.summary)}</div>
+        <label class="check"><input type="checkbox" class="reviewed-box" ${st.reviewed ? 'checked' : ''}> reviewed</label>
+      </div>
+      ${body}
+      <div class="review">
+        <div class="verdicts">${choices}</div>
+        <textarea placeholder="Notes for the auditor — what to change, why the default is wrong, what I missed…">${esc(st.note || '')}</textarea>
+        <div class="saved">${st.updated_at ? 'saved ' + esc(st.updated_at) : ''}</div>
+      </div>`;
+
+    el.querySelectorAll(`input[name="v-${it.id}"]`).forEach(r => r.addEventListener('change', () => {
+      el.querySelector('.reviewed-box').checked = true;
+      save(it.id, { verdict: r.value, reviewed: true });
+    }));
+    el.querySelector('.reviewed-box').addEventListener('change', e => save(it.id, { reviewed: e.target.checked }));
+    const ta = el.querySelector('textarea');
+    ta.addEventListener('input', () => {
+      clearTimeout(timers.get(it.id));
+      timers.set(it.id, setTimeout(() => save(it.id, { note: ta.value }), 500));
+    });
+    el.querySelectorAll('[data-jump]').forEach(a => a.addEventListener('click', e => {
+      e.preventDefault();
+      const target = document.querySelector(`.card[data-id="${a.dataset.jump}"]`);
+      if (!target) return;
+      target.classList.remove('hidden');
+      target.querySelector('details').open = true;
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }));
+    return el;
+  }
+
+  function refs(it) {
+    if (!it.refs || !it.refs.length) return '';
+    return `<div class="refs">${it.refs.map(r => `<span>${esc(r)}</span>`).join('')}</div>`;
+  }
+
+  async function save(id, patch) {
+    const el = document.querySelector(`.card[data-id="${id}"]`);
+    const saved = el.querySelector('.saved');
+    try {
+      const r = await fetch(`/api/state/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
+      if (!r.ok) throw new Error(`${r.status}`);
+      state[id] = await r.json();
+      el.classList.toggle('reviewed', !!state[id].reviewed);
+      saved.className = 'saved';
+      saved.textContent = 'saved ' + state[id].updated_at;
+      updateProgress();
+    } catch (err) {
+      saved.className = 'saved err';
+      saved.textContent = `not saved (${err.message}) — the server has stopped (submitted?) or is not running`;
+    }
+  }
+
+  function updateProgress() {
+    const total = items.size;
+    const done = [...items.keys()].filter(id => state[id]?.reviewed).length;
+    $('#progress-text').textContent = `${done} / ${total} reviewed`;
+    $('#progress-bar').style.width = total ? `${100 * done / total}%` : '0';
+    for (const span of document.querySelectorAll('.count')) {
+      const ids = [...items.entries()].filter(([, v]) => v.group === span.dataset.group).map(([id]) => id);
+      const n = ids.filter(id => state[id]?.reviewed).length;
+      span.textContent = `${n}/${ids.length}`;
+    }
+  }
+
+  function applyFilter() {
+    const mode = $('#filter').value;
+    for (const el of document.querySelectorAll('.card')) {
+      const st = state[el.dataset.id] || {};
+      const show = mode === 'all' || (mode === 'reviewed' && st.reviewed) || (mode === 'unreviewed' && !st.reviewed) || (mode === 'noted' && (st.note || '').trim());
+      el.classList.toggle('hidden', !show);
+    }
+  }
+
+  // Grouped by verdict within each section, so a reader sees every `Change`
+  // or `Fix` together; items reviewed without a verdict follow, then the
+  // untouched ids.
+  function summary() {
+    const pr = findings.pr;
+    const lines = [`### PR #${pr.number} audit review — ${pr.head}`, ''];
+    const noteLines = st => ((st.note || '').trim() ? [`  - ${st.note.trim().replace(/\n/g, '\n    ')}`] : []);
+    for (const sec of findings.sections) {
+      lines.push(`#### ${sec.id} — ${sec.title}`, '');
+      const byVerdict = new Map(findings.verdicts[sec.id].map(v => [v, []]));
+      const noVerdict = [];
+      for (const g of sec.groups) for (const it of g.items) {
+        const st = state[it.id] || {};
+        if (st.verdict) {
+          if (!byVerdict.has(st.verdict)) byVerdict.set(st.verdict, []);
+          byVerdict.get(st.verdict).push(it);
+        } else if (st.reviewed || (st.note || '').trim()) {
+          noVerdict.push(it);
+        }
+      }
+      for (const [verdict, its] of byVerdict) {
+        if (!its.length) continue;
+        lines.push(`**${verdict}** (${its.length})`, '');
+        for (const it of its) lines.push(`- ${it.id} — ${it.summary}`, ...noteLines(state[it.id] || {}));
+        lines.push('');
+      }
+      if (noVerdict.length) {
+        lines.push(`**Reviewed, no verdict** (${noVerdict.length})`, '');
+        for (const it of noVerdict) lines.push(`- ${it.id} — ${it.summary}`, ...noteLines(state[it.id] || {}));
+        lines.push('');
+      }
+    }
+    const untouched = [...items.keys()].filter(id => !state[id]?.reviewed);
+    if (untouched.length) lines.push(`_Unreviewed: ${untouched.join(', ')}_`, '');
+    return lines.join('\n');
+  }
+
+  function toast(msg) {
+    const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 1600);
+  }
+
+  $('#filter').addEventListener('change', applyFilter);
+  $('#expand').addEventListener('click', () => document.querySelectorAll('details').forEach(d => d.open = true));
+  $('#collapse').addEventListener('click', () => document.querySelectorAll('details').forEach(d => d.open = false));
+  // Two clicks within four seconds: the first arms the button, the second stops
+  // the server, which is what tells the auditing agent the review is done.
+  let armed = null;
+  $('#submit').addEventListener('click', async () => {
+    const btn = $('#submit');
+    if (!armed) {
+      btn.textContent = 'Confirm submit';
+      armed = setTimeout(() => { armed = null; btn.textContent = 'Submit'; }, 4000);
+      return;
+    }
+    clearTimeout(armed); armed = null;
+    btn.disabled = true; btn.textContent = 'Submitting…';
+    const banner = $('#banner');
+    try {
+      const r = await fetch('/api/submit', { method: 'POST' });
+      if (!r.ok) throw new Error(`${r.status}`);
+      const { submitted_at } = await r.json();
+      document.body.classList.add('submitted');
+      banner.hidden = false; banner.className = 'banner';
+      banner.textContent = `Submitted ${submitted_at}. The server has stopped and the auditor has been notified; nothing saves from here. If another round is needed, the auditor restarts the server and you reload this page.`;
+      btn.textContent = 'Submitted';
+    } catch (err) {
+      btn.disabled = false; btn.textContent = 'Submit';
+      banner.hidden = false; banner.className = 'banner err';
+      banner.textContent = `Submit failed (${err.message}) — is server.py running?`;
+    }
+  });
+  $('#copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(summary()); toast('Summary copied as markdown'); }
+    catch { toast('Clipboard blocked — open the console for the text'); console.log(summary()); }
+  });
+
+  load().catch(err => { $('#main').innerHTML = `<p class="saved err">Could not load findings: ${esc(err.message)}. Start <code>server.py</code> and reload.</p>`; });
+})();
+</script>
+</body>
+</html>
