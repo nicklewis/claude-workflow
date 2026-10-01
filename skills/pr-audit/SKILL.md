@@ -255,17 +255,22 @@ considered and did not encode is not on the list.
 
 A lead, then two deliverables, in this order, always.
 
-**Lead — what the change accomplishes, and the mechanism it rests
-on.** Two paragraphs before the verdict, in your own words. The first
-says what the PR does, as what a caller or user gets that they did not
-get before, and how the PR gets there: what it moves, adds, or changes,
-and what stays the same. The second gives the mechanism the change
-rests on: the inputs the code holds, the decision it makes over them,
-and the shape it produces, each named by its identifier, with each
-domain term glossed at first use. A third paragraph, what the PR
-leaves as it is, belongs only where the ticket history would otherwise
-mislead: a `Fixes` whose ticket-title defect was fixed by an earlier
-commit, or a scope the ticket names and the PR does not deliver.
+**Lead — what the change accomplishes, and any new mechanism it
+introduces.** Short paragraphs before the verdict, in your own words.
+The first says concisely what the PR does, as what a caller or user
+gets that they did not get before, and what stays the same. The second
+is optional: write it only when the PR introduces a mechanism the
+codebase did not have before, such as a new setting, endpoint, stored
+format, data flow, or rule, which a reader needs in order to follow
+the items below. It says what the mechanism takes in, what it decides,
+and what it produces, naming identifiers only where they help. A PR
+that changes behavior inside mechanisms that already exist gets no
+second paragraph, because a restatement of how the diff implements the
+change gives the reader nothing the items need. A third paragraph,
+what the PR leaves as it is, belongs only where the ticket history
+would otherwise mislead: a `Fixes` whose ticket-title defect was fixed
+by an earlier commit, or a scope the ticket names and the PR does not
+deliver.
 
 Write the lead from the code and the tickets and check it against the
 artifact; never summarize the PR description. The description is an
@@ -276,7 +281,7 @@ mutate their argument, and a lead written from the document would have
 handed the reader the wrong model before the first finding. The lead
 is the reader's model of the system for everything below it. Run the
 acceptance pass over it with the paragraph as the unit;
-`~/pr-audits/2213/findings.json` carries a worked example.
+`tracker/example-findings.json` carries a worked example.
 
 **A — Correctness.** Verdict first, in the first sentence. The verdict
 closes with the risk profile: the level of risk of the change as a whole,
@@ -375,7 +380,7 @@ expands its own referents. The line you appended to the scratchpad in
 step 5 is a pointer into your context — "`Identity.user` relationship,
 no `back_populates`" — and it is the wrong unit to ship, because it
 names a construct you recognize and the reader has never met. The item
-written from it says what the PR did, as an act with a location ("adds
+written from it says what the PR did, as an act ("adds
 a one-way `Identity.user` relationship at `models.py:141` and no
 `User.identities` collection, so a user's identities are reachable
 only by query"); what turns on it, with the consequence of each way
@@ -387,8 +392,16 @@ where that is grounded, or which search came back empty; and what the
 artifact does now. The tell is a summary that reads as a noun phrase:
 a noun phrase names a thing, and an item has to name an act and its
 consequence. The same rule reaches A: a `summary` states the claim in
-words that stand without the `detail`, and the `detail` carries the
-mechanism a reader would otherwise have to open the source file for.
+words that stand without the `detail`.
+
+Both halves of every item, in A and in B, describe behavior: what
+happens, to whom, and under what conditions. Mechanism and code
+references are allowed where they help explain the issue or the
+decision, and never required. The reader triages each card by what it
+does to users and operators, and mechanism written into every card by
+rule buries that under explanation the triage never uses. The
+`evidence` field already carries the `file:line` or command that backs
+an item, so the prose need not repeat it.
 
 ## Deliver
 
@@ -434,7 +447,10 @@ line with exit code 0 means the user pressed `Submit`; anything else is
 a fault to report and fix (a port clash, a crash), not a submission.
 Then read `state.json` back. Verdicts on A items are their triage of
 your findings, verdicts on B items are their answers to the decisions,
-and notes are their reasons.
+and notes are their reasons. On a B item, `Keep` means the choice could
+have gone either way and stays as the author left it, and `Affirm`
+means the choice has a reason that has to outlive the review, which the
+user's note states.
 
 **The turn after the notification contains a summary and a proposal,
 and nothing else.** No edit to the worktree, no comment on the PR, no
@@ -457,7 +473,8 @@ alone:
   `Fix` that is cleanup, `suggestion (blocking)` for a `Change`,
   `question` for `Ask the author`, and `issue (non-blocking)` naming
   the ticket for a `Defer` the user wants surfaced. The discussion
-  carries the item's mechanism, the user's note as their reason, and
+  carries the item's behavior, plus the mechanism and a fix where the
+  author needs them to act, the user's note as their reason, and
   for a B item the answer they gave. The attribution CLAUDE.md
   requires for anything posted through the user's account goes once,
   in the review body, and not on each comment: its job is to make
@@ -465,6 +482,21 @@ alone:
   Claude wrote. The label carries the weight: never phrase a verdict
   as the user's ruling (`Nick's call`, `Nick's direction`), which
   reads as authority rather than as review.
+- In that same review, a comment for every B item marked `Affirm`
+  whose reason the PR does not already record. Look for the reason
+  first in the commit messages and in any code comment at the decision
+  point. Where either states it, the item needs nothing. Otherwise the
+  comment, labelled `suggestion (blocking)` and placed inline or in
+  the body by the same first-ref test as the other comments, names the
+  choice, gives the user's note as the reason, and asks the author to
+  record it where a later editor will meet it: in a code comment at
+  the decision point when someone reading the code would otherwise
+  reverse the choice, and otherwise in a sentence of the message of
+  the commit that makes the choice. An `Affirm` with an empty note
+  gets no comment. The tracker refuses to submit one, and if one
+  arrives anyway, list it in the summary and ask for the reason,
+  because a reason you supply is an invented justification posted
+  under the user's verdict.
 - One Linear ticket for every item marked `Defer (ticket)`, drafted
   with the `write-ticket` skill, in the commissioning ticket's team and
   project, naming the PR and the commissioning ticket in its body, with
@@ -491,8 +523,8 @@ below.
 Past roughly 600 changed lines or 15 files, or when a section would run
 past ~1,500 words, split across turns in this fixed order:
 
-1. **Lead, verdict and evidence** — what the change accomplishes and the
-   mechanism it rests on, then the merge-relevant conclusion and what you
+1. **Lead, verdict and evidence** — what the change accomplishes and any
+   new mechanism it introduces, then the merge-relevant conclusion and what you
    ran. Always one chunk, always first, never deferred. A reviewer who
    reads only this must not be missing the headline.
 2. **Correctness findings**, chunked by component if long.

@@ -1,467 +1,468 @@
 {
-  "pr": {
-    "number": 2224,
-    "title": "feat(accounts): resolve or provision OIDC users",
-    "url": "https://github.com/flox/floxhub/pull/2224",
-    "author": "gilmishal",
-    "head": "4142977c6",
-    "ticket": "ENT-191",
-    "ticket_url": "https://linear.app/floxdotdev/issue/ENT-191/provision-a-user-on-their-first-login",
-    "audited": "2026-08-25",
-    "worktree": "~/src/floxhub-worktrees/audit-pr2224-resolve-or-provision",
-    "probe_file": "src/accounts/tests/test_audit_probes.py",
-    "probe_command": "just accounts test -k test_p"
+ "pr": {
+  "number": 2224,
+  "title": "feat(accounts): resolve or provision OIDC users",
+  "url": "https://github.com/flox/floxhub/pull/2224",
+  "author": "gilmishal",
+  "head": "4142977c6",
+  "ticket": "ENT-191",
+  "ticket_url": "https://linear.app/floxdotdev/issue/ENT-191/provision-a-user-on-their-first-login",
+  "audited": "2026-08-25",
+  "worktree": "~/src/floxhub-worktrees/audit-pr2224-resolve-or-provision",
+  "probe_file": "src/accounts/tests/test_audit_probes.py",
+  "probe_command": "just accounts test -k test_p"
+ },
+ "lead": [
+  {
+   "heading": "What the change accomplishes",
+   "text": "PR #2224 lets a user's first sign-in create their FloxHub account automatically. It adds an internal accounts endpoint that web-bff calls at login with the user's identity and profile claims. The endpoint returns the existing user or creates one, so there is no separate registration step. Only callers holding an internal API key can use it, and it is available on every deployment, SaaS included."
   },
-  "lead": [
-    {
-      "heading": "What the change accomplishes",
-      "text": "PR #2224 adds `POST /api/v1/accounts/internal/users/resolve-or-provision` to the accounts service: given an OIDC identity (`issuer`, `subject`) and the claims web-bff forwards from the token (`preferred_username`, `name`, `email`, `avatar_url`), it returns the existing user for that identity or creates one, so a first login provisions an account with no separate registration step. The route is guarded by an internal API key (`FLOXHUB_ACCOUNTS_INTERNAL_API_KEYS`, a comma-separated set so keys can rotate) rather than by an end-user token, and it is mounted in every authentication mode, SaaS included."
-    },
-    {
-      "heading": "The mechanism it rests on",
-      "text": "`user_service.py` looks the identity up by `(issuer, subject)`. On a miss it derives the user id as `uuid5(NAMESPACE_URL, issuer + NUL + subject)`, derives a handle from `preferred_username` (falling back to `name`) through the same normalization web-bff's `sanitizeToHandleShape` applies, writes the user, identity, and handle rows in one transaction, and then writes the two FGA ownership tuples. A unique-constraint failure on that insert is read as a concurrent first login and resolved to whichever request won, a handle already taken answers 409, and a login that finds the user stamps `last_login_at` and reasserts the FGA grants, so a grant lost to an FGA failure after the commit is repaired by the next login."
-    }
+  {
+   "heading": "What's new: accounts created from the login itself",
+   "text": "On a first login, the service derives the new account from the identity provider's data. The user id is computed from the provider's issuer and subject, so the same identity always gets the same id. The handle comes from the preferred username, or from the name when that is missing, using the rules web-bff already applies. The service then grants the user ownership in FGA. If two first logins race, both get the winning request's account; if the handle is taken, the login fails with 409. Every later login re-applies the FGA grants, so a grant lost to an FGA outage is repaired the next time the user signs in."
+  }
+ ],
+ "verdict": "The code does what the description says on every path I could run, including two the PR's own tests don't reach: two simultaneous first logins, and FGA failing after the account is saved. The defects are at the edges and in the written material: a malformed API key crashes the endpoint instead of being rejected, the endpoint refuses a lowercase 'bearer' that the rest of the service accepts, the published API description lists the wrong response codes, and three written statements are false.",
+ "limit_line": "Nothing here used a real FGA store, two truly simultaneous database transactions (the race probe fakes a missed lookup instead), the production web server's header handling (the malformed-key probe ran through the test client), or the deployed routing on either environment.",
+ "risk_pointer": "Proposed risk: low to medium. The change only adds an internal endpoint behind an API key and alters nothing that exists, but the ids and handles it creates are stored permanently, so a mistake in how they are derived would need a data fix rather than a redeploy. A test now pins how ids are computed.",
+ "verdicts": {
+  "A": [
+   "Fix",
+   "Accept",
+   "Defer (ticket)",
+   "Not a defect",
+   "Unsure"
   ],
-  "verdict": "The code does what the description says on every path I could execute, including the two paths the PR's own tests don't reach (the insert race and an FGA failure after commit). The defects are at the contract and prose layer: one unhandled exception on unauthenticated input, a scheme match that disagrees with the sibling parser, an OpenAPI contract that still advertises the 404 Nick asked to drop and omits the 201 the code returns, and three written claims the artifact contradicts.",
-  "limit_line": "Nothing here exercised a real OpenFGA store, Postgres under two genuinely concurrent transactions (the race probe forces a lookup miss rather than racing), uvicorn's header parsing (the non-ASCII probe ran through Starlette's TestClient), or deployed routing on either environment.",
-  "risk_pointer": "Low to medium: the change adds an internal endpoint behind the internal API key and alters nothing that exists, but what it stores persists — the uuid5-derived user id and the claimed handle — so a wrong derivation would need a data fix rather than a redeploy; that derivation is now test-pinned.",
-  "verdicts": {
-    "A": [
-      "Fix",
-      "Accept",
-      "Defer (ticket)",
-      "Not a defect",
-      "Unsure"
-    ],
-    "B": [
-      "Keep",
-      "Change",
-      "Ask the author",
-      "Unsure"
-    ]
-  },
-  "sections": [
+  "B": [
+   "Keep",
+   "Affirm",
+   "Change",
+   "Ask the author",
+   "Unsure"
+  ]
+ },
+ "sections": [
+  {
+   "id": "A",
+   "title": "Correctness",
+   "blurb": "What I could verify by running or reading. `Did not hold` is what the reader acts on; `Held` is the evidence behind the verdict.",
+   "groups": [
     {
-      "id": "A",
-      "title": "Correctness",
-      "blurb": "What I could verify by running or reading. `Did not hold` is what the reader acts on; `Held` is the evidence behind the verdict.",
-      "groups": [
-        {
-          "id": "did-not-hold",
-          "title": "Did not hold",
-          "items": [
-            {
-              "id": "A1",
-              "provenance": "ran",
-              "evidence": "test_p1_non_ascii_bearer",
-              "summary": "A non-ASCII bearer raises `TypeError` out of `hmac.compare_digest` — a 500 for unauthenticated callers",
-              "detail": "A latin-1 `Authorization: Bearer café` reaches `hmac.compare_digest` at `dependencies.py:211` and raises `TypeError: comparing strings with non-ASCII characters is not supported`. Unauthenticated callers get a 500 instead of a 401. Fix: compare `.encode()`d bytes, or pre-check ASCII.",
-              "refs": [
-                "src/accounts/accounts/dependencies.py:211"
-              ]
-            },
-            {
-              "id": "A2",
-              "provenance": "read",
-              "evidence": "dependencies.py:197; catalog_common/auth/auth0_strategy.py:71; RFC 7235 §2.1",
-              "summary": "The `Bearer` scheme match is case-sensitive, unlike the sibling parser in the same process and the `WWW-Authenticate` it emits",
-              "detail": "`dependencies.py:197` matches the scheme with `startswith('Bearer ')`. The public routes in the same process authenticate through FastAPI's `HTTPBearer` (`catalog_common/auth/auth0_strategy.py:71`), which matches with `scheme.lower() != 'bearer'`, and the 401 sets `WWW-Authenticate: Bearer`, invoking RFC 6750, whose scheme token is case-insensitive per RFC 7235 §2.1. So `bearer <token>` is accepted on `/tokens` and rejected on `/internal/users/…`. `test_p2_config_edge_cases` confirms `bearer k1` → 401. The one live caller (web-bff) sends `Bearer`, so nothing breaks today.",
-              "refs": [
-                "src/accounts/accounts/dependencies.py:197",
-                "src/catalog-common/catalog_common/auth/auth0_strategy.py:71"
-              ]
-            },
-            {
-              "id": "A3",
-              "provenance": "ran",
-              "evidence": "test_p5_openapi_responses",
-              "summary": "OpenAPI still advertises 404 on `resolve-or-provision`, omits the 201 the code returns, and lists 409/503 on `get-by-id`",
-              "detail": "Reading `/openapi.json`: `resolve-or-provision` advertises `200/401/404/409/422/503` and no `201`; `get-by-id` advertises `409/503` it cannot produce. Cause: `users.py:52` shares one `_ERRORS` dict across both routes, and the POST declares no 201. The review-thread fix (70fec72d1) removed the 404 code path but not the advertised response. web-bff (#2187) checks `response.ok`, so the client tolerates the 201.",
-              "refs": [
-                "src/accounts/accounts/api/v1/endpoints/users.py:52",
-                "src/accounts/accounts/api/v1/endpoints/users.py:98"
-              ]
-            },
-            {
-              "id": "A4",
-              "provenance": "read",
-              "evidence": "src/accounts/.claude/claude.md:31; PR #2221 closed 2026-08-17",
-              "summary": "`claude.md` says claims arrive from an 'OIDC token endpoint gate' that was closed unmerged",
-              "detail": "`src/accounts/.claude/claude.md:31` — 'receives claims only after the OIDC token endpoint gate has verified them.' That gate is PR #2221, closed unmerged on 2026-08-17 as 'no longer part of the stack'; the live design verifies in web-bff's callback (#2187). Stale the moment it merges.",
-              "refs": [
-                "src/accounts/.claude/claude.md:31"
-              ]
-            },
-            {
-              "id": "A5",
-              "provenance": "read",
-              "evidence": "README.md:154; terraform/units/accounts/api_gateway.tf:17; terraform/units/web-bff/ecs.tf:172",
-              "summary": "README says the internal routes are 'not exposed through the public Accounts route' — false on SaaS by design",
-              "detail": "`src/accounts/README.md:154` — 'not exposed through the public Accounts route.' On SaaS, API Gateway routes `ANY /accounts/{proxy+}` (`terraform/units/accounts/api_gateway.tf:17`) and web-bff hairpins through `https://api.*.flox.dev/accounts` (`terraform/units/web-bff/ecs.tf:172`), which is what ENT-225 means by 'the key is the only thing standing in front.' On-prem it becomes true only when #2187 adds `location /accounts/api/v1/accounts/internal/ { return 404; }`.",
-              "refs": [
-                "src/accounts/README.md:154",
-                "terraform/units/accounts/api_gateway.tf:17",
-                "terraform/units/web-bff/ecs.tf:172"
-              ]
-            },
-            {
-              "id": "A6",
-              "provenance": "read",
-              "evidence": "models.py:96, plus test_p9_second_login_stamps_only_last_login",
-              "summary": "The `email` column comment says 'refreshed at login'; the code never refreshes",
-              "detail": "`models.py:96` (from PR #2105) says `email` is 'seeded at provisioning, refreshed at login'. `test_p9_second_login_stamps_only_last_login` — a second login carrying a new email and avatar leaves both untouched and bumps only `last_login_at`. The code conforms to ENT-191 ('nothing reads provider claims after creation'); the comment, and the design doc §5.1 it descends from, say the opposite. Which side is stale is B1.",
-              "refs": [
-                "src/accounts/accounts/models.py:96"
-              ],
-              "links": [
-                "B1"
-              ]
-            },
-            {
-              "id": "A7",
-              "provenance": "ran",
-              "evidence": "mutation: delete the regrant at user_service.py:108, then just accounts test -k test_users",
-              "summary": "No test binds the FGA regrant in the insert-race recovery branch (`user_service.py:108`)",
-              "detail": "Deleting the regrant in the race branch (`user_service.py:108`) leaves all 8 PR tests green. `test_p3_race_recovers_existing_user` (monkeypatches `UserRepository.find_identity` to miss once, so the insert hits the `handles` primary key and the `IntegrityError` branch runs) is the only thing that catches the deletion.",
-              "refs": [
-                "src/accounts/accounts/user_service.py:108"
-              ],
-              "links": [
-                "B20"
-              ]
-            },
-            {
-              "id": "A8",
-              "provenance": "read",
-              "evidence": "ENT-191 'Report back on' vs the PR body",
-              "summary": "ENT-191's three 'report back on' items are unanswered in the PR body",
-              "detail": "How a caller supplies its own handle: no path exists — `LoginInput` has no `handle`. The wire shape of the operator-visible failure: `422 {'detail': 'Invalid handle: <length|format|unavailable>'}`, `409 {'detail': 'Handle is unavailable'}`, `422 {'detail': 'OIDC identity has no preferred_username or name claim'}`. Whether it landed behind ENT-225: yes — this PR carries its own `require_internal_api_key`; #2226 wired the terraform ahead of it.",
-              "refs": [],
-              "links": [
-                "B2"
-              ]
-            }
-          ]
-        },
-        {
-          "id": "held",
-          "title": "Held",
-          "items": [
-            {
-              "id": "A9",
-              "provenance": "ran",
-              "evidence": "CI run 32853773279 on 4142977c6; just accounts test in the audit worktree",
-              "summary": "CI is green on the head SHA and the suite passes locally (117 tests)",
-              "detail": "CI run 32853773279 on head `4142977c6`: accounts dev-env ×2, Nix build ×2, NEF, pre-commit, every integration matrix. `just accounts test` in `~/src/floxhub-worktrees/audit-pr2224-resolve-or-provision` → 117 passed. The probe file is `src/accounts/tests/test_audit_probes.py` there, untracked; `just accounts test -k test_p` runs it.",
-              "refs": []
-            },
-            {
-              "id": "A10",
-              "provenance": "ran",
-              "evidence": "test_p4_fga_failure_then_retry",
-              "summary": "An FGA failure after the DB commit leaves the user row, and a retry writes the grants",
-              "detail": "`FakeFga.write` raises after the database commit; the user row is present, FGA is empty, and a second POST returns 200 with both ownership tuples. Repair-by-retry holds as claimed.",
-              "refs": [
-                "src/accounts/accounts/user_service.py:112"
-              ]
-            },
-            {
-              "id": "A11",
-              "provenance": "ran",
-              "evidence": "test_p3_race_recovers_existing_user",
-              "summary": "The insert race resolves to the winner's user with grants reasserted",
-              "detail": "Monkeypatches `UserRepository.find_identity` to miss once, so the insert hits the `handles` primary key and the `IntegrityError` branch runs. Returns 200 with the winner's id and both tuples regranted.",
-              "refs": [
-                "src/accounts/accounts/user_service.py:100"
-              ]
-            },
-            {
-              "id": "A12",
-              "provenance": "ran",
-              "evidence": "test_p2_config_edge_cases",
-              "summary": "Empty and whitespace-only key configuration refuses every bearer; a rotation set accepts each member",
-              "detail": "Configurations `''`, `' , '`, `','` refuse every bearer including the empty one; `'k1, k2 ,'` accepts `k1` and `k2` and rejects `k1 `. Fail-closed holds. The PR's own `test_internal_user_routes_fail_closed` covers missing and wrong keys only, not empty configuration.",
-              "refs": [
-                "src/accounts/accounts/dependencies.py:205"
-              ]
-            },
-            {
-              "id": "A13",
-              "provenance": "ran",
-              "evidence": "node vs python3 over 15 inputs; test_p7_normalization",
-              "summary": "Handle normalization is byte-identical to web-bff's `sanitizeToHandleShape`",
-              "detail": "15 edge inputs through web-bff's `sanitizeToHandleShape` under node and the Python port are byte-identical (`Zoë Müller → zo-m-ller`, `ß → ''`, `ﬁsh → sh`, `İstanbul → i-stanbul`). `test_p7_normalization` adds eight parametrized cases including `FIRST_LAST → first-last`, `flox-admin → 422 unavailable`, a UUID → 422 unavailable, `--- → 422 length`.",
-              "refs": [
-                "src/accounts/accounts/handles.py:57",
-                "src/web-bff/src/utils/handle-validation.ts:191"
-              ]
-            },
-            {
-              "id": "A14",
-              "provenance": "ran",
-              "evidence": "test_p6_collision_leaves_nothing",
-              "summary": "A handle collision leaves no identity, user, or handle row behind",
-              "detail": "After the 409, exactly one row in each of `identities`, `users`, `handles`; the losing identity is not linked.",
-              "refs": []
-            },
-            {
-              "id": "A15",
-              "provenance": "ran",
-              "evidence": "mutations: delete the regrant in _record_login; change the uuid5 separator",
-              "summary": "The PR's tests bind the login-time regrant and the exact uuid5 derivation",
-              "detail": "Deleting the regrant in `_record_login` fails `test_provisioning_is_idempotent_by_issuer_and_subject`; changing the uuid5 separator from `\\0` to `/` fails `test_first_login_derives_handle_id_and_personal_ownership`. Both bind.",
-              "refs": [
-                "src/accounts/accounts/user_service.py:116",
-                "src/accounts/accounts/user_service.py:125"
-              ]
-            },
-            {
-              "id": "A16",
-              "provenance": "read",
-              "evidence": "ENT-191 Must / Must not vs the diff",
-              "summary": "Ticket coverage: every Must and Must-not that belongs to accounts is met",
-              "detail": "Must 1/2/3/5 met; Must 4 and Must-not 1 belong to web-bff (#2187); Must-not 2 met (the idempotency test plus A11); Must-not 3 met, derivation lives in accounts.",
-              "refs": []
-            },
-            {
-              "id": "A17",
-              "provenance": "read",
-              "evidence": "gh pr diff 2187; terraform/units/accounts/ecs.tf:134; shells/default/default.nix:469",
-              "summary": "The wire contract with #2187 matches end to end",
-              "detail": "Path `/api/v1/accounts/internal/users/resolve-or-provision`, body `identity.{issuer,subject}` / `preferred_username` / `name` / `email` / `avatar_url`, `Authorization: Bearer`, env var `FLOXHUB_ACCOUNTS_INTERNAL_API_KEYS` (terraform from #2226 and the dev shell already export it).",
-              "refs": []
-            }
-          ]
-        }
-      ]
+     "id": "did-not-hold",
+     "title": "Did not hold",
+     "items": [
+      {
+       "id": "A1",
+       "provenance": "ran",
+       "evidence": "test_p1_non_ascii_bearer",
+       "summary": "An API key containing a non-ASCII character crashes the endpoint with a 500 instead of a 401",
+       "detail": "Anyone can send a key containing a character such as 'é' and get a server error instead of 'unauthorized'. No credentials are needed to trigger it.",
+       "refs": [
+        "src/accounts/accounts/dependencies.py:211"
+       ]
+      },
+      {
+       "id": "A2",
+       "provenance": "read",
+       "evidence": "dependencies.py:197; catalog_common/auth/auth0_strategy.py:71; RFC 7235 §2.1",
+       "summary": "The internal endpoints refuse 'bearer' in lowercase, though the service's other endpoints accept it",
+       "detail": "A request whose authorization header says 'bearer' instead of 'Bearer' is accepted by the public endpoints in the same service and refused by the internal ones. The standard makes the word case-insensitive (RFC 7235 §2.1), and the service's own 401 response invokes that standard. Nothing breaks today, because web-bff, the only caller, sends 'Bearer'.",
+       "refs": [
+        "src/accounts/accounts/dependencies.py:197",
+        "src/catalog-common/catalog_common/auth/auth0_strategy.py:71"
+       ]
+      },
+      {
+       "id": "A3",
+       "provenance": "ran",
+       "evidence": "test_p5_openapi_responses",
+       "summary": "The published API description lists response codes the endpoints never return, and leaves out the one they do",
+       "detail": "Clients reading the API description are told that provisioning can answer 404, which it no longer does, and are not told that it answers 201 when it creates a user. The lookup endpoint is listed as answering 409 and 503, which it can't. Both endpoints share one list of error codes, and the review fix that removed the 404 case (70fec72d1) left it in the list. web-bff accepts any success code, so it handles the 201.",
+       "refs": [
+        "src/accounts/accounts/api/v1/endpoints/users.py:52",
+        "src/accounts/accounts/api/v1/endpoints/users.py:98"
+       ]
+      },
+      {
+       "id": "A4",
+       "provenance": "read",
+       "evidence": "src/accounts/.claude/claude.md:31; PR #2221 closed 2026-08-17",
+       "summary": "The accounts `claude.md` describes a token-verification step that was never merged",
+       "detail": "It says claims reach the service only after an 'OIDC token endpoint gate' has verified them. That gate was PR #2221, closed without merging on 2026-08-17. Tokens are actually verified in web-bff's login callback (#2187), so the statement is wrong from the moment this merges.",
+       "refs": [
+        "src/accounts/.claude/claude.md:31"
+       ]
+      },
+      {
+       "id": "A5",
+       "provenance": "read",
+       "evidence": "README.md:154; terraform/units/accounts/api_gateway.tf:17; terraform/units/web-bff/ecs.tf:172",
+       "summary": "The README says the internal routes can't be reached through the public accounts route, which is false on SaaS by design",
+       "detail": "On SaaS, the public API gateway forwards every accounts path, internal ones included, and web-bff itself reaches accounts through that public address. The API key is the only protection, which is what ENT-225 intends. On-prem the statement becomes true only once #2187 blocks those paths in the proxy.",
+       "refs": [
+        "src/accounts/README.md:154",
+        "terraform/units/accounts/api_gateway.tf:17",
+        "terraform/units/web-bff/ecs.tf:172"
+       ]
+      },
+      {
+       "id": "A6",
+       "provenance": "read",
+       "evidence": "models.py:96, plus test_p9_second_login_stamps_only_last_login",
+       "summary": "A code comment says a user's email is refreshed at each login; the code never updates it",
+       "detail": "A second login carrying a new email and avatar leaves both unchanged and only records the login time. The code follows ENT-191 ('nothing reads provider claims after creation'); the comment, and the design doc section it came from, say the opposite. Which one is out of date is B1.",
+       "refs": [
+        "src/accounts/accounts/models.py:96"
+       ],
+       "links": [
+        "B1"
+       ]
+      },
+      {
+       "id": "A7",
+       "provenance": "ran",
+       "evidence": "mutation: delete the regrant at user_service.py:108, then just accounts test -k test_users",
+       "summary": "The PR's tests would not notice if grants stopped being reapplied after two simultaneous first logins",
+       "detail": "When two first logins race, the losing request is supposed to reapply the winner's FGA grants. I deleted that step and all 8 of the PR's tests still passed. Only the audit's race probe, `test_p3_race_recovers_existing_user`, which makes the second login miss its lookup so its insert collides, caught the deletion.",
+       "refs": [
+        "src/accounts/accounts/user_service.py:108"
+       ],
+       "links": [
+        "B20"
+       ]
+      },
+      {
+       "id": "A8",
+       "provenance": "read",
+       "evidence": "ENT-191 'Report back on' vs the PR body",
+       "summary": "The PR description doesn't answer the three questions ENT-191 asked to hear back on",
+       "detail": "The answers, read from the code. Callers can't supply their own handle, because the request has no handle field. Operators see `422 {'detail': 'Invalid handle: <length|format|unavailable>'}`, `409 {'detail': 'Handle is unavailable'}`, or `422 {'detail': 'OIDC identity has no preferred_username or name claim'}`. And it did land behind ENT-225's key check: the PR carries its own check, and #2226 set up the key in terraform first.",
+       "refs": [],
+       "links": [
+        "B2"
+       ]
+      }
+     ]
     },
     {
-      "id": "B",
-      "title": "Decisions the PR made that only you can judge",
-      "blurb": "Each item names a choice the author already encoded, what it turns on, where that is grounded, and what stays if you say nothing. Ordered by what reading the PR will not reveal, durable before local — never by significance.",
-      "groups": [
-        {
-          "id": "lead",
-          "title": "Lead — the ones I'd push back on",
-          "items": [
-            {
-              "id": "B1",
-              "summary": "`models.py:96` says `email` is 'refreshed at login'; the code seeds it once and never refreshes it — which of the two is stale?",
-              "turns_on": "Whether ENT-191's 'syncing profile data on later logins is additive and out' means rejected (rewrite the comment to match the code) or deferred (leave the comment as the intended end state and accept that the code is behind it for now).",
-              "grounded": "ENT-191 for the behavior; design doc §5.1 and the comment for the end state.",
-              "default": "The comment stays as written and the code stays behind it.",
-              "refs": [
-                "src/accounts/accounts/models.py:96"
-              ],
-              "links": [
-                "A6"
-              ]
-            },
-            {
-              "id": "B2",
-              "summary": "One `resolve-or-provision` with derivation inside accounts replaces the design doc's two calls — and drops the caller-supplied handle",
-              "turns_on": "Whether the Auth0 Action (ENT-236) or any interactive picker can live without a caller-supplied `handle`.",
-              "grounded": "ENT-191 Must-not #3 for moving derivation in; nothing for dropping the supplied-handle half of design doc §5.1 (`POST /internal/logins` plus `POST /users`).",
-              "default": "The endpoint stays as is.",
-              "refs": [
-                "src/accounts/accounts/api/v1/endpoints/users.py:33"
-              ],
-              "links": [
-                "A8"
-              ]
-            },
-            {
-              "id": "B3",
-              "summary": "Stored format: `users.id = uuid5(NAMESPACE_URL, f'{issuer}\\0{subject}')`, now CI-pinned",
-              "turns_on": "Whether an edge will ever derive `user:{id}` without a lookup, and whether a Dex connector rename (which changes subjects) should change the id.",
-              "grounded": "Review thread ('leaves that possibility open'); ENT-224 said 'accounts-minted UUID'; design doc §3.1 argues subjects are unstable on-prem. `test_first_login_derives_handle_id_and_personal_ownership` pins the exact derivation.",
-              "default": "Stays, CI-enforced.",
-              "refs": [
-                "src/accounts/accounts/user_service.py:125"
-              ]
-            },
-            {
-              "id": "B4",
-              "summary": "Two id schemes in one `users` table: rows this endpoint creates get a deterministic uuid5 of issuer and subject; rows any other writer creates keep the random `uuid4` default",
-              "turns_on": "Whether a row's id must be derivable from its first identity for every user, or only for OIDC-provisioned ones. The other writers are the Auth0-Action registration path (ENT-236) and any import; if an edge ever derives `user:{id}` from the token (B3), users those writers created would be unreachable that way.",
-              "grounded": "`models.py:75` records the split ('other writers retain the random default'); nothing found that says whether ENT-236 should derive ids the same way.",
-              "default": "Stays.",
-              "refs": [
-                "src/accounts/accounts/models.py:75"
-              ]
-            },
-            {
-              "id": "B5",
-              "summary": "An FGA write on every login, not only on retry after a failure",
-              "turns_on": "FGA write cost per login versus repair-only-on-retry.",
-              "grounded": "ENT-227 said 'repaired by retrying the call or by the reconciler'; the PR's `claude.md` text reframes it as 'reasserted when provisioned again'.",
-              "default": "Stays.",
-              "refs": [
-                "src/accounts/accounts/user_service.py:112"
-              ]
-            }
-          ]
-        },
-        {
-          "id": "complete",
-          "title": "Complete list",
-          "items": [
-            {
-              "id": "B6",
-              "summary": "On-prem key configuration lives in #2187; this PR alone leaves every on-prem internal call at 401",
-              "turns_on": "Stack order only.",
-              "grounded": "#2187's diff sets `FLOXHUB_ACCOUNTS_INTERNAL_API_KEYS` from the on-prem secrets dir.",
-              "default": "Nothing; the stack order.",
-              "refs": [
-                "envs/floxhub-onprem/.flox/env/manifest.toml"
-              ]
-            },
-            {
-              "id": "B7",
-              "summary": "`issuer`/`subject` are bare `str`; an empty pair provisions a user",
-              "turns_on": "Callers always having verified the token before calling.",
-              "grounded": "Nothing in accounts. `test_p10_empty_identity_pair` — `''`/`''` → 201.",
-              "default": "No guard.",
-              "refs": [
-                "src/accounts/accounts/api/v1/endpoints/users.py:29"
-              ]
-            },
-            {
-              "id": "B8",
-              "summary": "`preferred_username or name`: an empty-string `preferred_username` falls through to `name`",
-              "turns_on": "Whether Dex ever emits `''` for a present claim.",
-              "grounded": "ENT-191 Must #2 says 'absent'. `test_p7_normalization` case `'' / 'Fallback Name' → fallback-name`.",
-              "default": "Stays.",
-              "refs": [
-                "src/accounts/accounts/user_service.py:133"
-              ]
-            },
-            {
-              "id": "B9",
-              "summary": "Non-ASCII usernames become hyphen-garbled handles; a name that normalizes to `''`, `flox*`, or a UUID shape is a 422 with no picker",
-              "turns_on": "Whether the operator-visible failure is the right outcome for those directory users.",
-              "grounded": "ENT-191 Must #3 and 'You may assume #2'.",
-              "default": "Stays.",
-              "refs": [
-                "src/accounts/accounts/handles.py:57"
-              ]
-            },
-            {
-              "id": "B10",
-              "summary": "When the provisioning insert fails on a unique constraint and no identity row exists for the pair afterward, the service answers 409 'Handle is unavailable' — it assumes the handle was the constraint that fired",
-              "turns_on": "The handle, `users.id`, and the `(issuer, subject)` pair being the only unique constraints across the three tables. A constraint added later (a unique `email`, say) would surface as a misleading 409 rather than its own error.",
-              "grounded": "Schema in `models.py` — `email` is not unique, and `users.id` is a function of the identity pair, so a collision on it implies the pair was already linked. Sound today.",
-              "default": "Stays.",
-              "refs": [
-                "src/accounts/accounts/user_service.py:107"
-              ]
-            },
-            {
-              "id": "B11",
-              "summary": "Status mapping: `HandleUnavailable`→409, `InvalidLogin`→422, anything else re-raised as 500",
-              "turns_on": "What web-bff and an operator do with each.",
-              "grounded": "ENT-227 for 409; nothing for 422 over 400.",
-              "default": "Stays.",
-              "refs": [
-                "src/accounts/accounts/api/v1/endpoints/users.py:83"
-              ]
-            },
-            {
-              "id": "B12",
-              "summary": "Error bodies carry the rejection reason and never the handle or username",
-              "turns_on": "The Sentry-PII posture for handles.",
-              "grounded": "Consistent with the contested posture (AI-178).",
-              "default": "Stays.",
-              "refs": [
-                "src/accounts/accounts/user_service.py:136"
-              ]
-            },
-            {
-              "id": "B13",
-              "summary": "`signup_completed_at` and `onboarding_completed_at` both set at provisioning",
-              "turns_on": "Whether on-prem has an onboarding step to gate.",
-              "grounded": "web-bff's on-prem services already hardcode both true (`PosixUserService.ts:49`, `AccountsUserService.ts:22`).",
-              "default": "Stays.",
-              "refs": [
-                "src/accounts/accounts/user_service.py:86"
-              ]
-            },
-            {
-              "id": "B14",
-              "summary": "`display_name = name`, so with `preferred_username` absent, `name` seeds both handle and display name",
-              "turns_on": "What display name a username-only identity should carry.",
-              "grounded": "Nothing beyond the ticket naming `name` as the username fallback.",
-              "default": "Stays.",
-              "refs": [
-                "src/accounts/accounts/user_service.py:81"
-              ]
-            },
-            {
-              "id": "B15",
-              "summary": "The internal router is mounted in every `authn_mode`, SaaS `auth0` included",
-              "turns_on": "SaaS exposure behind the key being acceptable.",
-              "grounded": "ENT-225 outcome ('reachable from the internet, the key is the only thing in front').",
-              "default": "Stays.",
-              "refs": [
-                "src/accounts/accounts/api/main.py:99"
-              ]
-            },
-            {
-              "id": "B16",
-              "summary": "ENT-225 Must #2 — `GET /internal/users/{id}` carries the end-user principal only as a path param, not in the shared assertion header",
-              "turns_on": "Whether the assertion-header rule applies to a lookup made while constructing the session.",
-              "grounded": "ENT-225; nothing in the PR addresses it.",
-              "default": "Stays.",
-              "refs": [
-                "src/accounts/accounts/api/v1/endpoints/users.py:116"
-              ]
-            },
-            {
-              "id": "B17",
-              "summary": "`internal_api_keys: str = ''`, comma-separated, whitespace stripped",
-              "turns_on": "The SSM value shape.",
-              "grounded": "ENT-225 Must #1; terraform `/floxhub/{env}/accounts/internal-api-keys`.",
-              "default": "Stays.",
-              "refs": [
-                "src/accounts/accounts/settings.py:31"
-              ]
-            },
-            {
-              "id": "B18",
-              "summary": "A `session.flush()` sits between adding the user and adding the identity (`user_service.py:97`); deleting it changes nothing",
-              "turns_on": "Nothing today: the `Identity.user` relationship makes SQLAlchemy order the user insert before the identity insert on its own. With the flush deleted, all 8 PR tests and the audit probes pass.",
-              "grounded": "Mutation run (`just accounts test -k test_users`, then `-k test_p`, with the line removed).",
-              "default": "The flush stays.",
-              "refs": [
-                "src/accounts/accounts/user_service.py:97"
-              ]
-            },
-            {
-              "id": "B19",
-              "summary": "The PR adds a one-way `Identity.user` relationship (`models.py:141`) and no `User.identities` collection, so a user's identities are reachable only by query",
-              "turns_on": "Whether a consumer will need to walk user → identities. The reconciler snapshot in design doc §5.8 exports each user with `identities: [{issuer, subject}]`, which is that walk, and ENT-231 builds it. A consumer that needs it either queries `identities` by `user_id` or adds `User.identities`; adding that side later without `back_populates` leaves the two sides unsynchronized within a session (an identity appended to `user.identities` does not set `identity.user` until flush and reload), which is the case a two-sided declaration exists to prevent.",
-              "grounded": "The relationship was added at review, so the type system shows the user must exist (Nick's comment on 8faf18306; fixed in 70fec72d1). Design doc §5.8 for the coming user → identities walk.",
-              "default": "One-way stays; a consumer needing the reverse walk queries `identities` by `user_id`.",
-              "refs": [
-                "src/accounts/accounts/models.py:141"
-              ]
-            },
-            {
-              "id": "B20",
-              "summary": "The race-branch regrant has no test in the PR",
-              "turns_on": "Whether the audit probe (or a two-transaction version) should be kept.",
-              "grounded": "A7.",
-              "default": "Stays untested.",
-              "refs": [
-                "src/accounts/accounts/user_service.py:108"
-              ],
-              "links": [
-                "A7"
-              ]
-            }
-          ]
-        }
-      ]
+     "id": "held",
+     "title": "Held",
+     "items": [
+      {
+       "id": "A9",
+       "provenance": "ran",
+       "evidence": "CI run 32853773279 on 4142977c6; just accounts test in the audit worktree",
+       "summary": "CI passes on the latest commit, and all 117 tests pass locally",
+       "detail": "CI run 32853773279 on `4142977c6` passed every job, including all the integration tests. The probe file is `src/accounts/tests/test_audit_probes.py` in the audit worktree, untracked; `just accounts test -k test_p` runs it.",
+       "refs": []
+      },
+      {
+       "id": "A10",
+       "provenance": "ran",
+       "evidence": "test_p4_fga_failure_then_retry",
+       "summary": "If FGA fails after the account is saved, the account survives and the next login grants ownership",
+       "detail": "With FGA failing after the save, the user exists without grants. A second login returns 200 and writes both ownership grants, as the PR claims.",
+       "refs": [
+        "src/accounts/accounts/user_service.py:112"
+       ]
+      },
+      {
+       "id": "A11",
+       "provenance": "ran",
+       "evidence": "test_p3_race_recovers_existing_user",
+       "summary": "Two simultaneous first logins end up with the same account, with its grants in place",
+       "detail": "The probe makes the second login miss its lookup so its insert collides. It returns 200 with the first login's user and both grants reapplied.",
+       "refs": [
+        "src/accounts/accounts/user_service.py:100"
+       ]
+      },
+      {
+       "id": "A12",
+       "provenance": "ran",
+       "evidence": "test_p2_config_edge_cases",
+       "summary": "An empty key setting refuses every request, and a list of keys accepts each one",
+       "detail": "With the key setting empty, or only commas and spaces, every request is refused, including one sending an empty key. With `'k1, k2 ,'` both keys work, and `k1` with a trailing space does not. The PR's own tests cover missing and wrong keys but not an empty setting.",
+       "refs": [
+        "src/accounts/accounts/dependencies.py:205"
+       ]
+      },
+      {
+       "id": "A13",
+       "provenance": "ran",
+       "evidence": "node vs python3 over 15 inputs; test_p7_normalization",
+       "summary": "Handles come out exactly as web-bff would make them",
+       "detail": "15 tricky names run through web-bff's version and the new one give identical handles; for example 'Zoë Müller' becomes `zo-m-ller` and 'İstanbul' becomes `i-stanbul`. Reserved names such as `flox-admin`, UUID-shaped names, and names that reduce to nothing are rejected with 422.",
+       "refs": [
+        "src/accounts/accounts/handles.py:57",
+        "src/web-bff/src/utils/handle-validation.ts:191"
+       ]
+      },
+      {
+       "id": "A14",
+       "provenance": "ran",
+       "evidence": "test_p6_collision_leaves_nothing",
+       "summary": "A handle collision leaves nothing behind",
+       "detail": "After the 409, the database holds only the existing user. No stray identity, user or handle is created, and the losing identity is not linked to anyone.",
+       "refs": []
+      },
+      {
+       "id": "A15",
+       "provenance": "ran",
+       "evidence": "mutations: delete the regrant in _record_login; change the uuid5 separator",
+       "summary": "The PR's tests would catch a change to the regrant on login or to how user ids are computed",
+       "detail": "Removing the regrant on login, or changing how the id is computed from issuer and subject, each makes one of the PR's tests fail.",
+       "refs": [
+        "src/accounts/accounts/user_service.py:116",
+        "src/accounts/accounts/user_service.py:125"
+       ]
+      },
+      {
+       "id": "A16",
+       "provenance": "read",
+       "evidence": "ENT-191 Must / Must not vs the diff",
+       "summary": "Every ENT-191 requirement that belongs to accounts is met",
+       "detail": "Must 1, 2, 3 and 5 and Must-not 2 and 3 are met here. Must 4 and Must-not 1 belong to web-bff, in #2187.",
+       "refs": []
+      },
+      {
+       "id": "A17",
+       "provenance": "read",
+       "evidence": "gh pr diff 2187; terraform/units/accounts/ecs.tf:134; shells/default/default.nix:469",
+       "summary": "This PR and web-bff's side, #2187, agree on the endpoint path, request fields, auth header and key setting",
+       "detail": "Both use the same path, the same request fields, an `Authorization: Bearer` header, and the `FLOXHUB_ACCOUNTS_INTERNAL_API_KEYS` setting, which terraform (#2226) and the dev shell already provide.",
+       "refs": []
+      }
+     ]
     }
-  ]
+   ]
+  },
+  {
+   "id": "B",
+   "title": "Decisions the PR made that only you can judge",
+   "blurb": "Each item names a choice the author already encoded, what it turns on, where that is grounded, and what stays if you say nothing. Ordered by what reading the PR will not reveal, durable before local — never by significance.",
+   "groups": [
+    {
+     "id": "lead",
+     "title": "Lead — the ones I'd push back on",
+     "items": [
+      {
+       "id": "B1",
+       "summary": "A comment says a user's email is refreshed at login, but the code sets it once at signup; one of the two is wrong",
+       "turns_on": "Whether ENT-191's 'syncing profile data on later logins is additive and out' means never, in which case the comment should change, or not yet, in which case the comment stays as the goal and the code is behind it for now.",
+       "grounded": "ENT-191 for the behavior; design doc §5.1 and the comment for the end state.",
+       "default": "The comment stays as written, and the code doesn't refresh.",
+       "refs": [
+        "src/accounts/accounts/models.py:96"
+       ],
+       "links": [
+        "A6"
+       ]
+      },
+      {
+       "id": "B2",
+       "summary": "The PR provisions a user with one call that picks the handle itself, replacing the design doc's two calls, so callers can no longer choose a handle",
+       "turns_on": "Whether the Auth0 Action (ENT-236), or any screen that lets a user pick a handle, can work without passing one in. If not, the endpoint needs a handle field.",
+       "grounded": "ENT-191 Must-not #3 for moving handle derivation into accounts; nothing for dropping the design doc's option to supply a handle (§5.1).",
+       "default": "The endpoint takes no handle.",
+       "refs": [
+        "src/accounts/accounts/api/v1/endpoints/users.py:33"
+       ],
+       "links": [
+        "A8"
+       ]
+      },
+      {
+       "id": "B3",
+       "summary": "User ids are computed from the identity provider's issuer and subject, so the same identity always gets the same id, and a test now locks this in",
+       "turns_on": "Whether anything will ever compute a user's id from their login token without looking it up, and whether renaming a Dex connector, which changes subjects, should change users' ids. The ids are stored permanently, so changing the scheme later means migrating data.",
+       "grounded": "Review thread ('leaves that possibility open'); ENT-224 said 'accounts-minted UUID'; design doc §3.1 argues subjects are unstable on-prem. `test_first_login_derives_handle_id_and_personal_ownership` pins the exact derivation.",
+       "default": "Computed ids, enforced by CI.",
+       "refs": [
+        "src/accounts/accounts/user_service.py:125"
+       ]
+      },
+      {
+       "id": "B4",
+       "summary": "Users created through this endpoint get computed ids, while users created any other way get random ones",
+       "turns_on": "Whether every user's id must be computable from their first login, or only the ids of users created here. The other ways users get created are the Auth0 Action signup (ENT-236) and imports. If anything ever computes a user's id from their token (B3), users created those ways couldn't be found that way.",
+       "grounded": "`models.py:75` records the split ('other writers retain the random default'); nothing found on whether ENT-236 should compute ids the same way.",
+       "default": "Two kinds of id stay.",
+       "refs": [
+        "src/accounts/accounts/models.py:75"
+       ]
+      },
+      {
+       "id": "B5",
+       "summary": "Every login writes the user's FGA grants again, not only a retry after a failure",
+       "turns_on": "Whether an FGA write on every login costs too much compared with repairing grants only when a retry happens.",
+       "grounded": "ENT-227 said 'repaired by retrying the call or by the reconciler'; the PR's `claude.md` recasts it as 'reasserted when provisioned again'.",
+       "default": "Grants are rewritten on every login.",
+       "refs": [
+        "src/accounts/accounts/user_service.py:112"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "complete",
+     "title": "Complete list",
+     "items": [
+      {
+       "id": "B6",
+       "summary": "On-prem, the internal key is configured only by #2187, so this PR on its own leaves every on-prem internal call failing with 401",
+       "turns_on": "Only the order in which the stack merges.",
+       "grounded": "#2187's diff sets `FLOXHUB_ACCOUNTS_INTERNAL_API_KEYS` from the on-prem secrets directory.",
+       "default": "Nothing changes; the stack order handles it.",
+       "refs": [
+        "envs/floxhub-onprem/.flox/env/manifest.toml"
+       ]
+      },
+      {
+       "id": "B7",
+       "summary": "An empty issuer and subject are accepted and create a user",
+       "turns_on": "Whether callers will always have verified the token before calling.",
+       "grounded": "Nothing in accounts; the audit probe `test_p10_empty_identity_pair` shows an empty pair gets 201.",
+       "default": "No check.",
+       "refs": [
+        "src/accounts/accounts/api/v1/endpoints/users.py:29"
+       ]
+      },
+      {
+       "id": "B8",
+       "summary": "An empty preferred username counts as missing, so the handle comes from the name instead",
+       "turns_on": "Whether Dex ever sends an empty preferred username instead of leaving it out.",
+       "grounded": "ENT-191 Must #2 says 'absent'; the `test_p7_normalization` case `'' / 'Fallback Name'` gives `fallback-name`.",
+       "default": "Empty counts as missing.",
+       "refs": [
+        "src/accounts/accounts/user_service.py:133"
+       ]
+      },
+      {
+       "id": "B9",
+       "summary": "Users with non-ASCII names get garbled handles, and a name that can't produce a valid handle blocks login with a 422 and no way to pick another",
+       "turns_on": "Whether failing the login is the right outcome for those directory users.",
+       "grounded": "ENT-191 Must #3 and 'You may assume #2'.",
+       "default": "Login fails for them.",
+       "refs": [
+        "src/accounts/accounts/handles.py:57"
+       ]
+      },
+      {
+       "id": "B10",
+       "summary": "When saving a new user collides with an existing record, the service assumes the handle was taken and answers 409 'Handle is unavailable'",
+       "turns_on": "Whether the handle is the only thing that can collide. Today it is. If a unique field is added later, such as a unique email, its collisions would be misreported as a taken handle.",
+       "grounded": "The schema in `models.py`: `email` is not unique, and a user id can only collide when the identity was already linked.",
+       "default": "Any collision is reported as a taken handle.",
+       "refs": [
+        "src/accounts/accounts/user_service.py:107"
+       ]
+      },
+      {
+       "id": "B11",
+       "summary": "A taken handle answers 409, invalid login data answers 422, and any other error is a 500",
+       "turns_on": "What web-bff and operators do with each code, and whether invalid input should answer 400 instead of 422.",
+       "grounded": "ENT-227 for 409; nothing for 422 over 400.",
+       "default": "The mapping stays.",
+       "refs": [
+        "src/accounts/accounts/api/v1/endpoints/users.py:83"
+       ]
+      },
+      {
+       "id": "B12",
+       "summary": "Error messages say why a login was rejected but never include the handle or username",
+       "turns_on": "Whether handles may be sent to Sentry, which is unsettled.",
+       "grounded": "Consistent with the contested position in AI-178.",
+       "default": "Handles stay out of error messages.",
+       "refs": [
+        "src/accounts/accounts/user_service.py:136"
+       ]
+      },
+      {
+       "id": "B13",
+       "summary": "New users are marked as having finished signup and onboarding immediately",
+       "turns_on": "Whether on-prem has an onboarding step these flags should hold users at.",
+       "grounded": "web-bff's on-prem services already report both as finished (`PosixUserService.ts:49`, `AccountsUserService.ts:22`).",
+       "default": "Both are set at creation.",
+       "refs": [
+        "src/accounts/accounts/user_service.py:86"
+       ]
+      },
+      {
+       "id": "B14",
+       "summary": "When there's no preferred username, the user's name becomes both their handle and their display name",
+       "turns_on": "What display name a user who only has a username should get.",
+       "grounded": "Nothing beyond the ticket naming the name as the fallback for the username.",
+       "default": "The name is used for both.",
+       "refs": [
+        "src/accounts/accounts/user_service.py:81"
+       ]
+      },
+      {
+       "id": "B15",
+       "summary": "The internal endpoints are available on every deployment, including SaaS, where the API key is their only protection",
+       "turns_on": "Whether exposing them on SaaS behind the key is acceptable.",
+       "grounded": "ENT-225's outcome ('reachable from the internet, the key is the only thing in front').",
+       "default": "Available everywhere.",
+       "refs": [
+        "src/accounts/accounts/api/main.py:99"
+       ]
+      },
+      {
+       "id": "B16",
+       "summary": "The user lookup takes the user id in its address instead of in the shared header ENT-225 requires for the end user",
+       "turns_on": "Whether ENT-225's header rule applies to a lookup made while a session is still being set up.",
+       "grounded": "ENT-225; the PR doesn't address it.",
+       "default": "The id stays in the address.",
+       "refs": [
+        "src/accounts/accounts/api/v1/endpoints/users.py:116"
+       ]
+      },
+      {
+       "id": "B17",
+       "summary": "The key setting is a comma-separated list, with spaces ignored, and defaults to empty",
+       "turns_on": "The format of the stored secret in SSM.",
+       "grounded": "ENT-225 Must #1; terraform's `/floxhub/{env}/accounts/internal-api-keys`.",
+       "default": "The format stays.",
+       "refs": [
+        "src/accounts/accounts/settings.py:31"
+       ]
+      },
+      {
+       "id": "B18",
+       "summary": "The PR forces an early database write between saving the user and saving their identity, and removing it changes nothing",
+       "turns_on": "Nothing today: the database library already saves the user first on its own, and with the extra write removed all the PR's tests and the audit probes still pass.",
+       "grounded": "Mutation run (`just accounts test -k test_users`, then `-k test_p`, with the line removed).",
+       "default": "The extra write stays.",
+       "refs": [
+        "src/accounts/accounts/user_service.py:97"
+       ]
+      },
+      {
+       "id": "B19",
+       "summary": "The PR links each identity to its user but not each user to their identities, so finding a user's identities takes a query",
+       "turns_on": "Whether something will need to go from a user to their identities. The reconciler snapshot in design doc §5.8, which ENT-231 builds, does exactly that. It can query identities by user id, or add the reverse link (`User.identities`); a reverse link added later without `back_populates` can disagree with the forward one within a session until it is saved and reloaded.",
+       "grounded": "The link was added at review so that the types show every identity has a user (Nick's comment on 8faf18306, fixed in 70fec72d1). Design doc §5.8 for the coming user-to-identities walk.",
+       "default": "One-way stays; a consumer that needs the reverse direction queries identities by user id.",
+       "refs": [
+        "src/accounts/accounts/models.py:141"
+       ]
+      },
+      {
+       "id": "B20",
+       "summary": "The PR has no test for reapplying grants after two simultaneous first logins",
+       "turns_on": "Whether to keep the audit's race probe, or a version with two real transactions, as a permanent test.",
+       "grounded": "A7.",
+       "default": "It stays untested.",
+       "refs": [
+        "src/accounts/accounts/user_service.py:108"
+       ],
+       "links": [
+        "A7"
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
 }

@@ -114,9 +114,22 @@
   // Backticks are the only markup the findings carry: `x` → <code>x</code>.
   const md = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
 
+  // The proposal posts an Affirm's note as the reason the author is asked to
+  // record, so Submit refuses while one is empty rather than let the auditor
+  // supply a reason of its own.
+  const NOTE_REQUIRED = new Set(['Affirm']);
+  const VERDICT_HELP = {
+    Keep: 'The choice could have gone either way. It stays as it is, and nothing is posted.',
+    Affirm: 'The choice has a reason that should be written down, so a later editor does not undo it. Write the reason in the note: if the PR does not already record it, the author is asked to.',
+  };
+  const PLACEHOLDER = 'Notes for the auditor — what to change, why the default is wrong, what I missed…';
+  const REASON_PLACEHOLDER = 'Why this choice is right. The author is asked to record this reason.';
+  const placeholderFor = verdict => NOTE_REQUIRED.has(verdict) ? REASON_PLACEHOLDER : PLACEHOLDER;
+
   let findings, state = {};
   const items = new Map();   // id → {item, section}
   const timers = new Map();
+  const pendingNotes = new Map();   // id → note text typed but not yet saved
 
   async function load() {
     const [f, s] = await Promise.all([
@@ -194,7 +207,7 @@
         ${refs(it)}<div class="links">${links}</div></div></details>`;
     }
     const choices = findings.verdicts[sec.id].map(v =>
-      `<label><input type="radio" name="v-${it.id}" value="${esc(v)}" ${st.verdict === v ? 'checked' : ''}>${esc(v)}</label>`).join('');
+      `<label${VERDICT_HELP[v] ? ` title="${esc(VERDICT_HELP[v])}"` : ''}><input type="radio" name="v-${it.id}" value="${esc(v)}" ${st.verdict === v ? 'checked' : ''}>${esc(v)}</label>`).join('');
     el.innerHTML = `
       <div class="card-head">
         <span class="id" id="${it.id}">${it.id}</span>
@@ -204,19 +217,21 @@
       ${body}
       <div class="review">
         <div class="verdicts">${choices}</div>
-        <textarea placeholder="Notes for the auditor — what to change, why the default is wrong, what I missed…">${esc(st.note || '')}</textarea>
+        <textarea placeholder="${esc(placeholderFor(st.verdict))}">${esc(st.note || '')}</textarea>
         <div class="saved">${st.updated_at ? 'saved ' + esc(st.updated_at) : ''}</div>
       </div>`;
 
+    const ta = el.querySelector('textarea');
     el.querySelectorAll(`input[name="v-${it.id}"]`).forEach(r => r.addEventListener('change', () => {
       el.querySelector('.reviewed-box').checked = true;
+      ta.placeholder = placeholderFor(r.value);
       save(it.id, { verdict: r.value, reviewed: true });
     }));
     el.querySelector('.reviewed-box').addEventListener('change', e => save(it.id, { reviewed: e.target.checked }));
-    const ta = el.querySelector('textarea');
     ta.addEventListener('input', () => {
       clearTimeout(timers.get(it.id));
-      timers.set(it.id, setTimeout(() => save(it.id, { note: ta.value }), 500));
+      pendingNotes.set(it.id, ta.value);
+      timers.set(it.id, setTimeout(() => { pendingNotes.delete(it.id); save(it.id, { note: ta.value }); }, 500));
     });
     el.querySelectorAll('[data-jump]').forEach(a => a.addEventListener('click', e => {
       e.preventDefault();
@@ -319,9 +334,30 @@
   $('#collapse').addEventListener('click', () => document.querySelectorAll('details').forEach(d => d.open = false));
   // Two clicks within four seconds: the first arms the button, the second stops
   // the server, which is what tells the auditing agent the review is done.
+  // Saves notes still waiting out the typing debounce, so a note typed just
+  // before Submit is neither lost nor missed by the empty-reason check.
+  async function flushNotes() {
+    const pending = [...pendingNotes.entries()];
+    pendingNotes.clear();
+    for (const [id] of pending) clearTimeout(timers.get(id));
+    await Promise.all(pending.map(([id, note]) => save(id, { note })));
+  }
+
   let armed = null;
   $('#submit').addEventListener('click', async () => {
     const btn = $('#submit');
+    const banner = $('#banner');
+    await flushNotes();
+    const missing = [...items.keys()].filter(id => NOTE_REQUIRED.has(state[id]?.verdict) && !(state[id]?.note || '').trim());
+    if (missing.length) {
+      banner.hidden = false; banner.className = 'banner err';
+      banner.textContent = `Affirm needs your reason in the note before you submit: ${missing.join(', ')}.`;
+      const first = document.querySelector(`.card[data-id="${missing[0]}"]`);
+      first.classList.remove('hidden');
+      first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    banner.hidden = true;
     if (!armed) {
       btn.textContent = 'Confirm submit';
       armed = setTimeout(() => { armed = null; btn.textContent = 'Submit'; }, 4000);
@@ -329,7 +365,6 @@
     }
     clearTimeout(armed); armed = null;
     btn.disabled = true; btn.textContent = 'Submitting…';
-    const banner = $('#banner');
     try {
       const r = await fetch('/api/submit', { method: 'POST' });
       if (!r.ok) throw new Error(`${r.status}`);
